@@ -1,0 +1,3 @@
+# 面板密码与历史数据不要进仓库
+config.php
+hist_data.php
