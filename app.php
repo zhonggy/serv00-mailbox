@@ -177,14 +177,54 @@ function create_mailbox($prefix, $pw, $domain) {
 }
 
 // ---- 口令门（可选）：ACCESS_CODE 非空时启用，输对一次后 session 内免输 ----
+// 防爆破：同一 IP 连错 5 次后锁定 10 分钟（记录存 gate_data.php，带防直接访问守卫）
+define('GATE_FILE', __DIR__ . '/gate_data.php');
+define('GATE_GUARD', "<?php http_response_code(403); exit('forbidden'); ?>\n");
+define('GATE_MAX_FAIL', 5);    // 连续失败次数上限
+define('GATE_BLOCK_SEC', 600); // 锁定时长（秒）
+function gate_ip() {
+    if (!empty($_SERVER['HTTP_CF_CONNECTING_IP'])) return trim($_SERVER['HTTP_CF_CONNECTING_IP']); // 经 Cloudflare 回源时取真实访客 IP
+    return $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+}
+function gate_load() {
+    if (!@is_file(GATE_FILE)) return [];
+    $c = @file_get_contents(GATE_FILE);
+    if ($c === false) return [];
+    if (($p = strpos($c, '?>')) !== false) $c = substr($c, $p + 2);
+    $d = @json_decode(trim($c), true);
+    return is_array($d) ? $d : [];
+}
+function gate_save($d) {
+    $now = time();
+    foreach ($d as $ip => $v) if (($v['b'] ?? 0) <= $now && ($v['t'] ?? 0) < $now - 3600) unset($d[$ip]); // 清理过期记录
+    return @file_put_contents(GATE_FILE, GATE_GUARD . json_encode($d), LOCK_EX) !== false;
+}
 if (ACCESS_CODE !== '') {
-    $code = $_REQUEST['code'] ?? '';
-    if ($code !== '' && $code === ACCESS_CODE) $_SESSION['code_ok'] = true;
+    $gip = gate_ip();
+    $gd = gate_load();
+    $gst = $gd[$gip] ?? ['f' => 0, 'b' => 0, 't' => 0];
+    $gnow = time();
+    $gblocked = ($gst['b'] ?? 0) > $gnow;
+    $gerr = '';
+    if (!$gblocked && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['code'])) {
+        if (hash_equals(ACCESS_CODE, (string)$_POST['code'])) {
+            unset($gd[$gip]); gate_save($gd);
+            $_SESSION['code_ok'] = true;
+            header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?')); exit;
+        }
+        $gst['f'] = ($gst['f'] ?? 0) + 1; $gst['t'] = $gnow;
+        if ($gst['f'] >= GATE_MAX_FAIL) { $gst['b'] = $gnow + GATE_BLOCK_SEC; $gst['f'] = 0; }
+        $gd[$gip] = $gst; gate_save($gd);
+        sleep(1); // 拖慢脚本爆破
+        $gerr = '口令不对，再想想。';
+    }
+    if ($gblocked) $gerr = '尝试次数过多，请 10 分钟后再试。';
     if (empty($_SESSION['code_ok'])) {
         echo '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>访问口令</title></head>'
            . '<body style="font-family:-apple-system,sans-serif;background:#f4f6f8;margin:0;padding:40px">'
            . '<div style="max-width:360px;margin:60px auto;background:#fff;border-radius:12px;padding:28px;box-shadow:0 2px 12px rgba(0,0,0,.08)">'
            . '<h3 style="margin:0 0 16px">请输入访问口令</h3>'
+           . ($gerr !== '' ? '<p style="color:#d93025;margin:0 0 12px">' . h($gerr) . '</p>' : '')
            . '<form method="post"><input name="code" type="password" required autofocus style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:15px;border:1px solid #ddd;border-radius:8px">'
            . '<button style="width:100%;margin-top:14px;padding:12px;font-size:16px;background:#1a73e8;color:#fff;border:0;border-radius:8px;cursor:pointer">进入</button></form></div></body></html>';
         exit;
