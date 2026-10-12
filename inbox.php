@@ -6,9 +6,9 @@
  * ============================================================ */
 session_start();
 header('Content-Type: text/html; charset=utf-8');
+date_default_timezone_set('Asia/Shanghai'); // 显示时间统一用北京时间
 mb_internal_encoding('UTF-8');
 
-// ===== 配置（部署时按自己的信息填写）=====
 define('IMAP_HOST', 'mailX.serv00.com'); // IMAP 服务器：把 X 换成你账号所在的服务器编号（与面板地址对应）
 define('IMAP_PORT', 993);
 
@@ -120,8 +120,10 @@ function extract_text($raw) {
     $parts = preg_split("/\r?\n\r?\n/", $raw, 2);
     $htext = ltrim($parts[0]); $body = $parts[1] ?? '';
     $hd = parse_headers_block($htext);
-    $ct = strtolower($hd['content-type'] ?? 'text/plain');
-    if (strpos($ct, 'multipart/') === 0 && preg_match('/boundary="?([^";\s]+)"?/i', $ct, $m)) {
+    $ct_raw = $hd['content-type'] ?? 'text/plain';
+    $ct = strtolower($ct_raw);
+    // boundary 区分大小写：必须从原始（未转小写）的 Content-Type 里提取
+    if (strpos($ct, 'multipart/') === 0 && preg_match('/boundary="?([^";\s]+)"?/', $ct_raw, $m)) {
         $b = $m[1];
         $chunks = explode('--' . $b, $body);
         foreach (['text/plain', 'text/html'] as $want) {
@@ -163,8 +165,10 @@ function find_part($raw, $want) {
     $parts = preg_split("/\r?\n\r?\n/", ltrim($raw), 2);
     $htext = $parts[0]; $body = $parts[1] ?? '';
     $hd = parse_headers_block($htext);
-    $ct = strtolower($hd['content-type'] ?? 'text/plain');
-    if (strpos($ct, 'multipart/') === 0 && preg_match('/boundary="?([^";\s]+)"?/i', $ct, $m)) {
+    $ct_raw = $hd['content-type'] ?? 'text/plain';
+    $ct = strtolower($ct_raw);
+    // boundary 区分大小写：必须从原始（未转小写）的 Content-Type 里提取
+    if (strpos($ct, 'multipart/') === 0 && preg_match('/boundary="?([^";\s]+)"?/', $ct_raw, $m)) {
         foreach (explode('--' . $m[1], $body) as $ch) {
             if (trim($ch, " \r\n\t-") === '') continue;
             $r = find_part($ch, $want);
@@ -338,9 +342,9 @@ if ($email && $pass) {
 <title><?= $view ? '邮件正文' : '收件箱' ?> · <?= h($email ?: '邮箱') ?></title>
 <style>
 *{box-sizing:border-box}
-body{margin:0;background:#f2f4f8;color:#333;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
-.wrap{max-width:680px;margin:0 auto;min-height:100vh;background:#fff;box-shadow:0 0 12px rgba(0,0,0,.06)}
-.topbar{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid #eee}
+body{margin:0;background:#eef3f8 url('bg-lowpoly-light.webp') no-repeat center top fixed;background-size:cover;color:#333;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+.wrap{max-width:680px;margin:0 auto;min-height:100vh;background:rgba(255,255,255,.88);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);box-shadow:0 0 12px rgba(0,0,0,.06)}
+.topbar{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid #eee;background:linear-gradient(135deg,rgba(224,242,254,.55),rgba(237,233,254,.55))}
 .topbar h2{margin:0;font-size:18px}
 .topbar .who{font-size:12px;color:#888;margin-top:2px}
 .topbar .acts{white-space:nowrap}

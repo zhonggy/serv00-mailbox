@@ -5,18 +5,19 @@
  * 成功后把账号密码放进 session，"去邮箱"直达站内收件箱 inbox.php
  * ============================================================ */
 session_start();
+date_default_timezone_set('Asia/Shanghai'); // 显示时间统一用北京时间
 
-// ===== 配置（部署时按自己的信息填写）=====
+// ===== 配置 =====
 define('PANEL_BASE',  'https://panelX.serv00.com'); // 面板地址：把 X 换成你账号所在的服务器编号
 define('PANEL_USER',  'your_username');             // 面板用户名
-// 开邮箱用的域名（多个）：表单里以下拉框选择。填你已在面板里开通了邮件功能的域名
+// 开邮箱用的域名（多个）：表单里以下拉框选择，要加域名改这里
 define('MAIL_DOMAINS', ['example.com']);
 define('WEBMAIL_URL', 'https://mail.serv00.com/'); // 官方 webmail（备用）
-// 给页面加个访问口令（防陌生人乱开邮箱）。设为 '' 表示不设，强烈建议设置
+// 可选：给页面加个访问口令（防陌生人乱开邮箱）。设为 '' 表示不设。
 define('ACCESS_CODE', '');
 // ===== 配置结束 =====
 
-// ---- 面板密码：放在 config.php 里（不要提交到 Git），格式：<?php define('PANEL_PASS', '你的面板密码');
+// ---- 面板密码：config.php -> 从旧版 mailbox.php 自动迁移 -> 空 ----
 function panel_pass() {
     static $v = null;
     if ($v !== null) return $v;
@@ -24,6 +25,20 @@ function panel_pass() {
     if (file_exists($cfg)) {
         include $cfg;
         if (defined('PANEL_PASS') && PANEL_PASS !== '') return $v = PANEL_PASS;
+    }
+    // 从同目录旧版 mailbox.php 迁移（用户之前在里面填过密码）
+    $legacy = __DIR__ . '/mailbox.php';
+    if (file_exists($legacy)) {
+        $src = file_get_contents($legacy);
+        if (preg_match("/define\s*\(\s*'PANEL_PASS'\s*,\s*'((?:[^'\\\\]|\\\\.)*)'\s*\)/", $src, $m) && $m[1] !== '') {
+            $pw = stripcslashes($m[1]);
+            file_put_contents($cfg, "<?php define('PANEL_PASS', '" . addcslashes($pw, "'\\") . "');\n");
+            @chmod($cfg, 0600);
+            // 从旧文件里擦掉密码
+            $src2 = preg_replace("/define\s*\(\s*'PANEL_PASS'\s*,\s*'((?:[^'\\\\]|\\\\.)*)'\s*\)/", "define('PANEL_PASS', '')", $src, 1);
+            if ($src2 !== null && $src2 !== $src) @file_put_contents($legacy, $src2);
+            return $v = $pw;
+        }
     }
     return $v = '';
 }
@@ -336,8 +351,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prefix'])) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>开邮箱</title>
 <style>
-body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#f4f6f8;margin:0;padding:24px}
-.card{max-width:480px;margin:40px auto;background:#fff;border-radius:12px;padding:28px;box-shadow:0 2px 12px rgba(0,0,0,.08)}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#eef3f8 url('bg-lowpoly-light.webp') no-repeat center top fixed;background-size:cover;margin:0;padding:24px}
+.wrap{max-width:980px;margin:24px auto;display:grid;grid-template-columns:repeat(6,1fr);gap:14px}
+.tile{background:rgba(255,255,255,.84);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.95);border-radius:18px;padding:24px;box-shadow:0 6px 24px rgba(110,140,180,.10)}
+.hero{grid-column:1/-1;display:flex;align-items:center;gap:18px;background:linear-gradient(135deg,rgba(224,242,254,.94),rgba(237,233,254,.94))}
+.hero .icon{font-size:46px;line-height:1}
+.hero h2{margin:0;font-size:24px;color:#1e3a5f}
+.hero .sub{color:#5b7a99;font-size:13px;margin-top:6px}
+.tile-form{grid-column:span 4}
+.tile-form h3{margin:0 0 4px;font-size:17px;color:#1e3a5f}
+.tile-side{grid-column:span 2;display:flex;flex-direction:column;gap:14px}
+.mini{background:#f2f7fd;border:1px dashed #cfe0f2;border-radius:14px;padding:16px;font-size:13px;color:#4a6a8a;line-height:1.8}
+.mini b{color:#2b5a8c}
+.tile-hist{grid-column:1/-1}
+.tile-hist.hist{margin-top:0;border-top:0;padding-top:24px}
+@media(max-width:720px){.tile-form,.tile-side{grid-column:1/-1}.tile-hist{order:3}.tile-side{order:4}.hero .icon{font-size:36px}}
 h2{margin:0 0 6px;font-size:20px}
 .sub{color:#888;font-size:13px;margin-bottom:18px}
 label{display:block;font-size:14px;margin:12px 0 6px;color:#333}
@@ -377,9 +405,16 @@ button:hover{background:#1663c7}
 </style>
 </head>
 <body>
-<div class="card">
-  <h2>开邮箱</h2>
-  <div class="sub">支持域名：<?= h(implode('、', MAIL_DOMAINS)) ?> · 不用登录面板 · v7</div>
+<div class="wrap">
+  <div class="tile hero">
+    <div class="icon">✉️</div>
+    <div>
+      <h2>开邮箱</h2>
+      <div class="sub">支持域名：<?= h(implode('、', MAIL_DOMAINS)) ?> · 不用登录面板 · v8</div>
+    </div>
+  </div>
+  <div class="tile tile-form">
+    <h3>新建邮箱</h3>
   <?php if ($result !== null): ?>
     <?php if ($result[0]): ?>
       <div class="ok">✅ 开好了</div>
@@ -407,11 +442,16 @@ button:hover{background:#1663c7}
     <?php if (ACCESS_CODE !== ''): ?><input type="hidden" name="code" value="<?= h($_REQUEST['code'] ?? '') ?>"><?php endif; ?>
     <button type="submit">开邮箱</button>
   </form>
-  <div class="hist" id="hist" style="display:none">
+  </div>
+  <div class="tile-side">
+    <div class="mini"><b>📌 小贴士</b><br>密码至少 8 位；点 🎲 可随机生成前缀和密码。</div>
+    <div class="mini"><b>🔒 安全</b><br>邮箱密码只在 session 里流转，不落地；创建历史保存在服务器上（防直接访问）。</div>
+    <div class="mini"><b>📥 收件</b><br>开好后点「去邮箱」直达站内收件箱，也可用官方 webmail 备用。</div>
+  </div>
+  <div class="tile tile-hist hist" id="hist" style="display:none">
     <div class="hist-head"><b>📋 创建历史</b><button type="button" class="clearbtn" id="histClear">清空</button></div>
     <div id="histList"></div>
   </div>
-  <div class="note">后端用面板登录态调用开邮箱接口；邮箱密码只在 session 里流转，不落地。<br>创建历史保存在服务器上（防直接访问）；记得给本页加上访问口令。</div>
 </div>
 <script>
 function randPrefix(){
