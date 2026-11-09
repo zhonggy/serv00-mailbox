@@ -7,14 +7,15 @@
 session_start();
 date_default_timezone_set('Asia/Shanghai'); // 显示时间统一用北京时间
 
-// ===== 配置 =====
-define('PANEL_BASE',  'https://panelX.serv00.com'); // 面板地址：把 X 换成你账号所在的服务器编号
-define('PANEL_USER',  'your_username');             // 面板用户名
+// ===== 配置（部署时按自己的信息填写）=====
+define('PANEL_BASE',  'https://panelX.serv00.com'); // 面板地址
+define('PANEL_USER',  'your_username');                       // 面板用户名
 // 开邮箱用的域名（多个）：表单里以下拉框选择，要加域名改这里
 define('MAIL_DOMAINS', ['example.com']);
 define('WEBMAIL_URL', 'https://mail.serv00.com/'); // 官方 webmail（备用）
-// 可选：给页面加个访问口令（防陌生人乱开邮箱）。设为 '' 表示不设。
-define('ACCESS_CODE', '');
+// 管理员邮箱：用这个邮箱登录进开邮箱页，其他邮箱登录进收件箱。
+// 密码不写在这里，登录时由邮件服务器当场验证。
+define('ADMIN_EMAIL', 'admin@example.com');
 // ===== 配置结束 =====
 
 // ---- 面板密码：config.php -> 从旧版 mailbox.php 自动迁移 -> 空 ----
@@ -191,59 +192,83 @@ function create_mailbox($prefix, $pw, $domain) {
     return [false, '结果不明确（没看到成功/失败标记），请去面板确认 ' . h($full) . ' 是否已建好'];
 }
 
-// ---- 口令门（可选）：ACCESS_CODE 非空时启用，输对一次后 session 内免输 ----
-// 防爆破：同一 IP 连错 5 次后锁定 10 分钟（记录存 gate_data.php，带防直接访问守卫）
-define('GATE_FILE', __DIR__ . '/gate_data.php');
-define('GATE_GUARD', "<?php http_response_code(403); exit('forbidden'); ?>\n");
-define('GATE_MAX_FAIL', 5);    // 连续失败次数上限
-define('GATE_BLOCK_SEC', 600); // 锁定时长（秒）
-function gate_ip() {
-    if (!empty($_SERVER['HTTP_CF_CONNECTING_IP'])) return trim($_SERVER['HTTP_CF_CONNECTING_IP']); // 经 Cloudflare 回源时取真实访客 IP
-    return $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+// ---- 统一登录：管理员邮箱进开邮箱页，普通邮箱进收件箱 ----
+// 管理员只认邮箱地址，密码由邮件服务器当场验证，网站上不存管理员密码。
+// 登录成功一次后 session 内免登录；退出点开邮箱页右上角的「退出」。
+if (isset($_GET['logout'])) {
+    unset($_SESSION['admin_ok']);
+    header('Location: ./');
+    exit;
 }
-function gate_load() {
-    if (!@is_file(GATE_FILE)) return [];
-    $c = @file_get_contents(GATE_FILE);
-    if ($c === false) return [];
-    if (($p = strpos($c, '?>')) !== false) $c = substr($c, $p + 2);
-    $d = @json_decode(trim($c), true);
-    return is_array($d) ? $d : [];
-}
-function gate_save($d) {
-    $now = time();
-    foreach ($d as $ip => $v) if (($v['b'] ?? 0) <= $now && ($v['t'] ?? 0) < $now - 3600) unset($d[$ip]); // 清理过期记录
-    return @file_put_contents(GATE_FILE, GATE_GUARD . json_encode($d), LOCK_EX) !== false;
-}
-if (ACCESS_CODE !== '') {
-    $gip = gate_ip();
-    $gd = gate_load();
-    $gst = $gd[$gip] ?? ['f' => 0, 'b' => 0, 't' => 0];
-    $gnow = time();
-    $gblocked = ($gst['b'] ?? 0) > $gnow;
-    $gerr = '';
-    if (!$gblocked && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['code'])) {
-        if (hash_equals(ACCESS_CODE, (string)$_POST['code'])) {
-            unset($gd[$gip]); gate_save($gd);
-            $_SESSION['code_ok'] = true;
-            header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?')); exit;
+function imap_esc($s) { return str_replace(['\\', '"'], ['\\\\', '\\"'], $s); }
+function imap_cmd($fp, $tag, $cmd) {
+    fwrite($fp, $tag . ' ' . $cmd . "\r\n");
+    $lines = [];
+    while (($line = fgets($fp, 65536)) !== false) {
+        $t = rtrim($line, "\r\n");
+        if (preg_match('/\{(\d+)\}$/', $t, $m)) {
+            $need = (int)$m[1]; $data = '';
+            while ($need > 0 && !feof($fp)) {
+                $chunk = fread($fp, $need);
+                if ($chunk === false || $chunk === '') break;
+                $data .= $chunk; $need -= strlen($chunk);
+            }
+            $lines[] = $t . $data;
+            continue;
         }
-        $gst['f'] = ($gst['f'] ?? 0) + 1; $gst['t'] = $gnow;
-        if ($gst['f'] >= GATE_MAX_FAIL) { $gst['b'] = $gnow + GATE_BLOCK_SEC; $gst['f'] = 0; }
-        $gd[$gip] = $gst; gate_save($gd);
-        sleep(1); // 拖慢脚本爆破
-        $gerr = '口令不对，再想想。';
+        $lines[] = $t;
+        if (preg_match('/^' . preg_quote($tag, '/') . ' (OK|NO|BAD)/i', $t, $m2)) {
+            return [strtoupper($m2[1]) === 'OK', $lines];
+        }
     }
-    if ($gblocked) $gerr = '尝试次数过多，请 10 分钟后再试。';
-    if (empty($_SESSION['code_ok'])) {
-        echo '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>访问口令</title></head>'
-           . '<body style="font-family:-apple-system,sans-serif;background:#f4f6f8;margin:0;padding:40px">'
-           . '<div style="max-width:360px;margin:60px auto;background:#fff;border-radius:12px;padding:28px;box-shadow:0 2px 12px rgba(0,0,0,.08)">'
-           . '<h3 style="margin:0 0 16px">请输入访问口令</h3>'
-           . ($gerr !== '' ? '<p style="color:#d93025;margin:0 0 12px">' . h($gerr) . '</p>' : '')
-           . '<form method="post"><input name="code" type="password" required autofocus style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:15px;border:1px solid #ddd;border-radius:8px">'
-           . '<button style="width:100%;margin-top:14px;padding:12px;font-size:16px;background:#1a73e8;color:#fff;border:0;border-radius:8px;cursor:pointer">进入</button></form></div></body></html>';
-        exit;
+    return [false, $lines];
+}
+// 只验证账号密码是否正确，不读任何邮件
+function imap_check_login($email, $pass) {
+    $fp = @fsockopen('ssl://mailX.serv00.com', 993, $errno, $errstr, 20);
+    if (!$fp) return [false, '连不上邮件服务器：' . $errstr . "（$errno)"];
+    stream_set_timeout($fp, 25);
+    $greet = fgets($fp, 512);
+    if ($greet === false || stripos($greet, '* OK') !== 0) { fclose($fp); return [false, '邮件服务器无响应']; }
+    $r = imap_cmd($fp, 'a001', 'LOGIN "' . imap_esc($email) . '" "' . imap_esc($pass) . '"');
+    imap_cmd($fp, 'z999', 'LOGOUT');
+    fclose($fp);
+    if (!$r[0]) return [false, '邮箱登录失败：账号或密码不对'];
+    return [true, null];
+}
+if (empty($_SESSION['admin_ok'])) {
+    $login_err = '';
+    if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['email'])) {
+        $lem = strtolower(trim($_POST['email'] ?? ''));
+        $lpw = $_POST['mpw'] ?? '';
+        if ($lem !== '' && $lpw !== '') {
+            list($lok, $lerr) = imap_check_login($lem, $lpw);
+            if ($lok) {
+                if ($lem === strtolower(ADMIN_EMAIL)) {
+                    $_SESSION['admin_ok'] = true;
+                    header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?')); exit;
+                }
+                $_SESSION['mb_email'] = $lem;
+                $_SESSION['mb_pass'] = $lpw;
+                header('Location: inbox.php'); exit;
+            }
+            $login_err = $lerr;
+            sleep(1); // 失败拖慢 1 秒，拖慢爆破
+        } else {
+            $login_err = '请输入邮箱和密码。';
+        }
     }
+    echo '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>邮箱登录</title></head>'
+       . '<body style="font-family:-apple-system,sans-serif;background:#f4f6f8;margin:0;padding:40px">'
+       . '<div style="max-width:360px;margin:60px auto;background:#fff;border-radius:12px;padding:28px;box-shadow:0 2px 12px rgba(0,0,0,.08)">'
+       . '<h3 style="margin:0 0 20px;text-align:center;font-size:36px">邮箱登录</h3>'
+       . ($login_err !== '' ? '<p style="color:#d93025;margin:0 0 12px">' . h($login_err) . '</p>' : '')
+       . '<form method="post"><label style="display:block;font-size:14px;margin:12px 0 6px;color:#555">邮箱地址</label>'
+       . '<input name="email" type="email" required autofocus placeholder="例如 zhangsan@example.com" value="' . h($_POST['email'] ?? '') . '" style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:15px;border:1px solid #ddd;border-radius:8px">'
+       . '<label style="display:block;font-size:14px;margin:12px 0 6px;color:#555">密码</label>'
+       . '<input name="mpw" type="password" required style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:15px;border:1px solid #ddd;border-radius:8px">'
+       . '<button style="width:100%;margin-top:18px;padding:12px;font-size:16px;background:#1a73e8;color:#fff;border:0;border-radius:8px;cursor:pointer">登录</button></form></div></body></html>';
+    exit;
 }
 
 $result = null;
@@ -410,8 +435,9 @@ button:hover{background:#1663c7}
     <div class="icon">✉️</div>
     <div>
       <h2>开邮箱</h2>
-      <div class="sub">支持域名：<?= h(implode('、', MAIL_DOMAINS)) ?> · 不用登录面板 · v8</div>
+      <div class="sub">支持域名：<?= h(implode('、', MAIL_DOMAINS)) ?> · 不用登录面板 · v9</div>
     </div>
+    <a href="?logout=1" style="margin-left:auto;align-self:center;font-size:13px;color:#1a73e8;white-space:nowrap;text-decoration:none">退出</a>
   </div>
   <div class="tile tile-form">
     <h3>新建邮箱</h3>
@@ -439,7 +465,6 @@ button:hover{background:#1663c7}
       <button type="button" class="dice" onclick="randPass()" title="随机生成">🎲</button>
       <input id="pw" name="pw1" type="text" required minlength="8" placeholder="可手动输入，或点🎲随机">
     </div>
-    <?php if (ACCESS_CODE !== ''): ?><input type="hidden" name="code" value="<?= h($_REQUEST['code'] ?? '') ?>"><?php endif; ?>
     <button type="submit">开邮箱</button>
   </form>
   </div>
