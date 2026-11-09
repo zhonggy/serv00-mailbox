@@ -305,8 +305,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['hist_action'])) {
     if ($a === 'add') {
         $em = trim($_POST['email'] ?? ''); $pw = (string)($_POST['pass'] ?? '');
         if ($em !== '' && $pw !== '') {
+            // 同一邮箱重建时保留旧标签
+            $oldTag = '';
+            foreach ($h as $it) { if (($it['email'] ?? '') === $em) { $oldTag = (string)($it['tag'] ?? ''); break; } }
             $h = array_values(array_filter($h, function ($it) use ($em) { return ($it['email'] ?? '') !== $em; }));
-            array_unshift($h, ['email' => $em, 'pass' => $pw, 'time' => date('Y-m-d H:i:s')]);
+            array_unshift($h, ['email' => $em, 'pass' => $pw, 'time' => date('Y-m-d H:i:s'), 'tag' => $oldTag]);
         }
     } elseif ($a === 'import') {
         $imp = @json_decode($_POST['data'] ?? '[]', true);
@@ -316,7 +319,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['hist_action'])) {
             foreach (array_reverse($imp) as $it) {
                 $em = trim($it['email'] ?? ''); $pw = (string)($it['pass'] ?? '');
                 if ($em !== '' && $pw !== '' && !isset($have[$em])) {
-                    array_unshift($h, ['email' => $em, 'pass' => $pw, 'time' => (string)($it['time'] ?? date('Y-m-d H:i:s'))]);
+                    array_unshift($h, ['email' => $em, 'pass' => $pw, 'time' => (string)($it['time'] ?? date('Y-m-d H:i:s')), 'tag' => (string)($it['tag'] ?? '')]);
                     $have[$em] = true;
                 }
             }
@@ -324,6 +327,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['hist_action'])) {
     } elseif ($a === 'del') {
         $i = (int)($_POST['idx'] ?? -1);
         if (isset($h[$i])) array_splice($h, $i, 1);
+    } elseif ($a === 'tag') {
+        $i = (int)($_POST['idx'] ?? -1);
+        $tag = trim((string)($_POST['tag'] ?? ''));
+        if (isset($h[$i])) $h[$i]['tag'] = mb_substr($tag, 0, 30);
     } elseif ($a === 'clear') {
         $h = [];
     }
@@ -417,6 +424,7 @@ button:hover{background:#1663c7}
 .hist{margin-top:20px;border-top:1px solid #eee;padding-top:14px}
 .hist-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
 .hist-head b{font-size:15px}
+.htag{padding:6px 8px;font-size:13px;border:1px solid #ddd;border-radius:6px;width:120px;background:#fff}
 .clearbtn{width:auto;flex:none;margin:0;padding:6px 14px;font-size:13px;background:#f1f3f4;color:#666;border:1px solid #ddd;border-radius:6px;cursor:pointer}
 .hitem{border:1px solid #e8e8e8;border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#fbfcfd}
 .hrow1{display:flex;justify-content:space-between;align-items:center;gap:8px}
@@ -519,7 +527,8 @@ function renderHistList(h){
     '<button type="button" class="cpbtn" onclick="copyHistPass('+i+',this)">复制密码</button>'+
     '<a class="hgo" target="_blank" rel="noopener" href="?goinbox='+encodeURIComponent(it.email)+'">去邮箱 →</a>'+
     '<a class="hweb" target="_blank" rel="noopener" href="'+WEBMAIL_URL+'?_user='+encodeURIComponent(it.email)+'">官方备用</a>'+
-    '<button type="button" class="hdel" onclick="delHist('+i+')">删除</button></div></div>';
+    '<button type="button" class="hdel" onclick="delHist('+i+')">删除</button>'+
+    '<input class="htag" type="text" placeholder="标签" maxlength="30" value="'+escH(it.tag||'')+'" onchange="saveTag('+i+',this.value)"></div></div>';
   }).join('');
 }
 var _histCache=[];
@@ -537,6 +546,7 @@ function loadHistServer(){
 }
 function addHist(email,pass){histApi('add',{email:email,pass:pass});}
 function delHist(i){histApi('del',{idx:i});}
+function saveTag(i,v){histApi('tag',{idx:i,tag:v});}
 function copyStr(t,btn){
   var done=function(){var o=btn.textContent;btn.textContent='已复制';setTimeout(function(){btn.textContent=o;},1500);};
   var fb=function(){var ta=document.createElement('textarea');ta.value=t;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');done();}catch(e){}document.body.removeChild(ta);};
